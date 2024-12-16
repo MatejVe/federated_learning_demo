@@ -34,7 +34,7 @@ function initializeFLChartAccuracy() {
         data: { labels: Array.from({ length: GLOBAL_EPOCHS }, (_, i) => i + 1), datasets: [] },
         options: {
             plugins: { title: { display: true, text: 'Federated Learning: Accuracy' } },
-            scales: { y: { title: {display: true, text: 'Accuracy'}}, x: { title: {display: true, text: 'Global Epoch'}}},
+            scales: { x: { title: {display: true, text: 'Global Epoch'}}},
             animation: false
         }
     });
