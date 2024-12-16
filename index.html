@@ -13,10 +13,11 @@
         body {
             font-family: Arial, sans-serif;
             text-align: center;
+            margin: 20px;
         }
 
         canvas {
-            margin: 10px;
+            margin: 20px;
         }
 
         .chart-container {
@@ -25,12 +26,24 @@
             flex-wrap: wrap;
         }
 
-        /* Loading spinner */
+        h1,
+        h2,
+        h3 {
+            color: #333;
+        }
+
+        .description {
+            margin: 20px auto;
+            text-align: justify;
+            max-width: 800px;
+            line-height: 1.6;
+        }
+
         #loading {
             display: none;
-            text-align: center;
             font-size: 1.2rem;
-            margin: 20px;
+            color: #333;
+            margin-top: 20px;
         }
 
         .spinner {
@@ -53,6 +66,27 @@
 
 <body>
     <h1>Federated Learning vs Centralized Learning (MNIST)</h1>
+    <p><em>Explore how Federated Learning and Centralized Learning compare when training a model on the MNIST
+            dataset.</em></p>
+
+    <!-- Description of the process -->
+    <div class="description">
+        <p>
+            In <strong>Federated Learning</strong>, multiple clients (simulated here) train a shared model independently
+            on their local data.
+            After each round of training, the clients' models are aggregated to form a global model. Both the
+            <strong>average train accuracy</strong> (across all clients) and the <strong>global test set
+                accuracy</strong> are displayed over time.
+        </p>
+        <p>
+            In <strong>Centralized Learning</strong>, the entire dataset is combined into a single training set, and a
+            single model is trained
+            on this combined data. The chart displays the model's loss and accuracy on the training and test datasets.
+        </p>
+        <p>
+            The model aggregation mechanism is currently FedAvg.
+        </p>
+    </div>
     <button onclick="startFederatedLearning()">Run Federated Learning</button>
     <button onclick="trainCentralizedModel()">Run Centralized Learning</button>
 
@@ -65,12 +99,18 @@
     <!-- Side-by-Side Charts -->
     <div class="chart-container">
         <div>
-            <h3>Federated Learning</h3>
-            <canvas id="flChart" width="400" height="200"></canvas>
+            <h3>Client Losses</h3>
+            <canvas id="flChartLoss" width="500" height="300"></canvas>
         </div>
         <div>
+            <h3>Overall Accuracy</h3>
+            <canvas id="flChartAccuracy" width="500" height="300"></canvas>
+        </div>
+    </div>
+    <div class="chart-container">
+        <div>
             <h3>Centralized Learning</h3>
-            <canvas id="centralChart" width="400" height="200"></canvas>
+            <canvas id="centralChart" width="700" height="400"></canvas>
         </div>
     </div>
 
