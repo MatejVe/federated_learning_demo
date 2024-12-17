@@ -85,7 +85,7 @@
             on this combined data. The chart displays the model's loss and accuracy on the training and test datasets.
         </p>
         <p>
-            The model aggregation mechanism is currently FedAvg. The aggregation happens after 5 rounds of local
+            The basic model aggregation mechanism is FedAvg. The aggregation happens after 5 rounds of local
             training on each client - notice the loss spikes that happen immediately afterwards.
             There are 10 possible labels in total, however each client only see a subset of them. In this way
             we simulate non-iid data accross individual clients (also called label shift).
@@ -93,6 +93,10 @@
         <p>
             The centralized model handles the dataset without any issues. Federated learning, in this
             quite extreme scenario, fails to achieve almost any meaningful accuracy.
+        </p>
+        <p>
+            Below both the classic FedAvg algorithm, and the centralized learning algorithm, you can find an
+            implementation of the FedOpt algorithm. It features longer global training.
         </p>
     </div>
     <button onclick="startFederatedLearning()">Run Federated Learning</button>
@@ -125,6 +129,20 @@
     <!-- Training Output -->
     <pre id="outputFL"></pre>
     <pre id="outputCL"></pre>
+
+    <button onclick="startFedOptLearning()">Run FedOpt Algorithm</button>
+
+    <div class="chart-container">
+        <div>
+            <h3>FedOpt Client Losses</h3>
+            <canvas id="fedOptChartLoss" width="500" height="300"></canvas>
+        </div>
+        <div>
+            <h3>FedOpt Overall Accuracy</h3>
+            <canvas id="fedOptChartAccuracy" width="500" height="300"></canvas>
+        </div>
+    </div>
+    <pre id="outputFedOpt"></pre>
 
     <!-- Import JavaScript -->
     <script src="app.js"></script>

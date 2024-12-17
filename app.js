@@ -3,6 +3,8 @@ const NUM_CLIENTS = 3;
 const LOCAL_EPOCHS = 5;
 const GLOBAL_EPOCHS = 5;
 const CENTRALIZED_EPOCHS = 10;
+const FEDOPT_LOCAL_EPOCHS = 5;
+const FEDOPT_GLOBAL_EPOCHS = 10;
 const SAMPLE_SIZE = 5000; // Subset of cifar to avoid memory crashes
 const TEST_SIZE = 1000;
 const NUM_FEATURES = 10;
@@ -10,7 +12,7 @@ const clientColors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#F
 
 // Global Variables
 let data;
-let flChartLoss, flChartAccuracy, centralChart; // Chart instances
+let flChartLoss, flChartAccuracy, centralChart, proxChartLoss, proxChartAccuracy; // Chart instances
 
 /******************************************************
  * 1. CHART INITIALIZATION FUNCTIONS
@@ -69,6 +71,33 @@ function initializeCentralChart() {
     });
 }
 
+function initializeFedOptChartLoss() {
+    const fedOptCtxLoss = document.getElementById('fedOptChartLoss').getContext('2d');
+    fedOptChartLoss = new Chart(fedOptCtxLoss, {
+        type: 'line',
+        data: { labels: Array.from({length: FEDOPT_LOCAL_EPOCHS * FEDOPT_GLOBAL_EPOCHS}, (_, i) => i + 1), datasets: []},
+        options: {
+            plugins: { title: { display: true, text: 'FedProx: Client Loss' }},
+            scales: { x: {title: {display: true, text: 'Local Epoch'}},
+                    y: { beginAtZero: true, title: { display: true, text: 'Loss'}}},
+            animation: false
+        }
+    });
+}
+
+function initializeFedOptChartAccuracy() {
+    const fedOptCtxAccuracy = document.getElementById('fedOptChartAccuracy').getContext('2d');
+    fedOptChartAccuracy = new Chart(fedOptCtxAccuracy, {
+        type: 'line',
+        data: {labels: Array.from({length: FEDOPT_GLOBAL_EPOCHS}, (_, i) => i + 1), datasets: []},
+        options: {
+            plugins: {title: {display: true, text: 'FedProx: Accuracy'}},
+            scales: {x: {title: {display: true, text: 'Global Epoch'}}},
+            animation: false
+        }
+    });
+}
+
 /******************************************************
  * 2. SPINNER CONTROL FUNCTIONS
  ******************************************************/
@@ -93,9 +122,10 @@ function generateSyntheticDataWithTest(numSamples = SAMPLE_SIZE, testSize = TEST
 
     // Define label distributions for each client
     const clientLabelDistribution = [
+        [2, 3, 4, 5, 6, 7, 8], 
         [0, 1, 2, 3, 4],    // Client 1 gets labels 0-3
-        [3, 4, 5, 6, 7],       // Client 2 gets labels 4-6
-        [4, 5, 6, 7, 8, 9]        // Client 3 gets labels 7-9
+              // Client 2 gets labels 4-6
+        [5, 6, 7, 8, 9]        // Client 3 gets labels 7-9
     ];
 
     const clientData = Array.from({ length: numClients }, () => ({ xs: [], labels: [] }));
@@ -103,7 +133,7 @@ function generateSyntheticDataWithTest(numSamples = SAMPLE_SIZE, testSize = TEST
 
     function generateFeaturesForLabel(label) {
         // Use Gaussian distributions with mean dependent on label
-        const mean = label * 0.5; // Shift means for each label
+        const mean = label; // Shift means for each label
         return Array.from({ length: numFeatures }, () => mean + Math.random() * 0.5 - 0.5);
     }
 
@@ -146,7 +176,6 @@ function createModel() {
     model.compile({ optimizer: 'adam', loss: 'categoricalCrossentropy', metrics: ['accuracy'] });
     return model;
 }
-
 
 function aggregateWeights(clientWeights) {
     const averagedWeights = clientWeights[0].weights.map(w => tf.zerosLike(w));
@@ -279,6 +308,119 @@ async function startFederatedLearning() {
     hideLoading();
 }
 
+async function trainClientFedOpt(data, clientId, globalWeights) {
+    const model = createModel();
+    model.setWeights(globalWeights); // Initialize with global weights
+
+    const inputShape = [data.xs.length, 10];
+    const xs = tf.tensor2d(data.xs, inputShape);
+    const ys = tf.oneHot(tf.tensor1d(data.labels, 'int32'), 10);
+
+    await model.fit(xs, ys, {
+        epochs: FEDOPT_LOCAL_EPOCHS,
+        callbacks: {
+            onEpochEnd: (epoch, logs) => {
+                if (!fedOptChartLoss.data.datasets[clientId]) {
+                    fedOptChartLoss.data.datasets.push({
+                        label: `Client ${clientId + 1} Loss`,
+                        data: [],
+                        borderWidth: 2,
+                        borderColor: clientColors[clientId % clientColors.length],
+                        fill: false
+                    });
+                }
+                fedOptChartLoss.data.datasets[clientId].data.push(logs.loss);
+                fedOptChartLoss.update();
+            }
+        }
+    });
+    // Evaluate the model to get accuracy
+    const evalResult = await model.evaluate(xs, ys);
+    const accuracy = evalResult.length > 1 ? evalResult[1].dataSync()[0] : 0; // Check for accuracy tensor
+    console.log(`Client ${clientId} Accuracy: ${accuracy}`);
+
+    // Compute weight deltas (local model - global model)
+    const updatedWeights = model.getWeights();
+    const weightDeltas = updatedWeights.map((w, i) => w.sub(globalWeights[i]));
+
+    // Dispose of tensors
+    xs.dispose();
+    ys.dispose();
+
+    return { weightDeltas, accuracy };
+}
+
+function aggregateWeightsFedOpt(globalWeights, clientUpdates, learningRate = 0.1) {
+    // Iterate over client updates and apply SGD sequentially
+    clientUpdates.forEach(({ weightDeltas }) => {
+        globalWeights = globalWeights.map((w, i) => 
+            w.sub(weightDeltas[i].mul(tf.scalar(learningRate)))
+        );
+    });
+
+    return globalWeights;
+}
+
+
+async function startFedOptLearning() {
+    showLoading("FedOpt in Progress...");
+    initializeFedOptChartLoss();
+    initializeFedOptChartAccuracy();
+
+    const model = createModel();
+    let globalWeights = model.getWeights().map(w => w.clone());
+
+    const allData = await generateSyntheticDataWithTest();
+    const clientsData = allData.clientData;
+
+    // Initialize datasets if not already present
+    if (fedOptChartAccuracy.data.datasets.length === 0) {
+        fedOptChartAccuracy.data.datasets.push({
+            label: 'Global Test Set Accuracy',
+            data: [],
+            borderColor: '#36A2EB', // Blue
+            yAxisID: 'y1',
+            fill: false
+        });
+        fedOptChartAccuracy.data.datasets.push({
+            label: 'Average Train Accuracy',
+            data: [],
+            borderColor: '#FF9F40', // Orange
+            yAxisID: 'y1',
+            fill: false
+        });
+    }
+
+    for (let epoch = 0; epoch < FEDOPT_GLOBAL_EPOCHS; epoch++) {
+        let clientUpdates = [];
+        let trainAccuracySum = 0;
+
+        // Train clients and collect weight deltas
+        for (let j = 0; j < NUM_CLIENTS; j++) {
+            const result = await trainClientFedOpt(clientsData[j], j, globalWeights);
+            clientUpdates.push(result);
+            trainAccuracySum += result.accuracy;
+        }
+
+        // Aggregate updates using server-side Adam
+        globalWeights = aggregateWeightsFedOpt(globalWeights, clientUpdates);
+        
+        const avgTrainAccuracy = trainAccuracySum / NUM_CLIENTS;
+
+        // Evaluate global model on the test set
+        const testAccuracy = await evaluateGlobalModel(globalWeights);
+        console.log(`Global Epoch ${epoch + 1}: Test Accuracy = ${testAccuracy}`);
+
+        // Update chart
+        fedOptChartAccuracy.data.datasets[0].data.push(testAccuracy);
+        fedOptChartAccuracy.data.datasets[1].data.push(avgTrainAccuracy);
+        fedOptChartAccuracy.update();
+    }
+    const finalAccuracy = await evaluateGlobalModel(globalWeights);
+
+    document.getElementById('outputFedOpt').innerText = `FedOpt Complete!\nFinal Test Set Accuracy: ${(finalAccuracy * 100).toFixed(2)}%`;
+    hideLoading();
+}
 
 /******************************************************
  * 6. CENTRALIZED LEARNING FUNCTION
