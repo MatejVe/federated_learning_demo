@@ -66,8 +66,9 @@
 
 <body>
     <h1>Federated Learning vs Centralized Learning (MNIST)</h1>
-    <p><em>Explore how Federated Learning and Centralized Learning compare when training a model on the MNIST
-            dataset.</em></p>
+    <p><em>Explore how Federated Learning and Centralized Learning compare when training a model on a synthetic
+            dataset. </em></p>
+    <p><em>FL clients are fed non-iid data on purpose, to showcase the possible pitfalls of Federated Learning.</em></p>
 
     <!-- Description of the process -->
     <div class="description">
@@ -84,7 +85,14 @@
             on this combined data. The chart displays the model's loss and accuracy on the training and test datasets.
         </p>
         <p>
-            The model aggregation mechanism is currently FedAvg.
+            The model aggregation mechanism is currently FedAvg. The aggregation happens after 5 rounds of local
+            training on each client - notice the loss spikes that happen immediately afterwards.
+            There are 10 possible labels in total, however each client only see a subset of them. In this way
+            we simulate non-iid data accross individual clients (also called label shift).
+        </p>
+        <p>
+            The centralized model handles the dataset without any issues. Federated learning, in this
+            quite extreme scenario, fails to achieve almost any meaningful accuracy.
         </p>
     </div>
     <button onclick="startFederatedLearning()">Run Federated Learning</button>

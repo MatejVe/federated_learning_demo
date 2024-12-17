@@ -1,13 +1,15 @@
 // Constants
-const NUM_CLIENTS = 5;
+const NUM_CLIENTS = 3;
 const LOCAL_EPOCHS = 5;
 const GLOBAL_EPOCHS = 5;
 const CENTRALIZED_EPOCHS = 10;
-const SAMPLE_SIZE = 5000; // Subset of MNIST to avoid memory crashes
+const SAMPLE_SIZE = 5000; // Subset of cifar to avoid memory crashes
+const TEST_SIZE = 1000;
+const NUM_FEATURES = 10;
 const clientColors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40'];
 
 // Global Variables
-let mnistData;
+let data;
 let flChartLoss, flChartAccuracy, centralChart; // Chart instances
 
 /******************************************************
@@ -20,7 +22,7 @@ function initializeFLChartLoss() {
         data: { labels: Array.from({ length: LOCAL_EPOCHS * GLOBAL_EPOCHS }, (_, i) => i + 1), datasets: [] },
         options: {
             plugins: { title: { display: true, text: 'Federated Learning: Client Loss' } },
-            scales: { y: { beginAtZero: true, max: 0.6, title: { display: true, text: 'Loss' }} , 
+            scales: { y: { beginAtZero: true, title: { display: true, text: 'Loss' }} , 
                     x: {title: {display: true, text: 'Local Epoch'}}},
             animation: false
         }
@@ -80,48 +82,57 @@ function hideLoading() {
 }
 
 /******************************************************
- * 3. MNIST DATA LOADING FUNCTIONS
+ * 3. CIFAR DATA LOADING FUNCTIONS
  ******************************************************/
-async function loadMNIST() {
-    if (mnistData) return mnistData;
+function generateSyntheticDataWithTest(numSamples = SAMPLE_SIZE, testSize = TEST_SIZE, numFeatures = NUM_FEATURES, numClients = NUM_CLIENTS) {
+    if (data) return data;
+    
+    console.log("Generating structured synthetic dataset...");
 
-    const imageURL = 'https://storage.googleapis.com/learnjs-data/model-builder/mnist_images.png';
-    const labelURL = 'https://storage.googleapis.com/learnjs-data/model-builder/mnist_labels_uint8';
+    const totalSamplesPerClient = Math.floor(numSamples / numClients);
 
-    const [imageBuffer, labelBuffer] = await Promise.all([
-        fetch(imageURL).then(res => res.arrayBuffer()),
-        fetch(labelURL).then(res => res.arrayBuffer())
-    ]);
+    // Define label distributions for each client
+    const clientLabelDistribution = [
+        [0, 1, 2, 3, 4],    // Client 1 gets labels 0-3
+        [3, 4, 5, 6, 7],       // Client 2 gets labels 4-6
+        [4, 5, 6, 7, 8, 9]        // Client 3 gets labels 7-9
+    ];
 
-    const imageData = new Uint8Array(imageBuffer);
-    const labelData = new Uint8Array(labelBuffer);
+    const clientData = Array.from({ length: numClients }, () => ({ xs: [], labels: [] }));
+    const testData = { xs: [], labels: [] };
 
-    const images = [], labels = [], testImages = [], testLabels = [];
+    function generateFeaturesForLabel(label) {
+        // Use Gaussian distributions with mean dependent on label
+        const mean = label * 0.5; // Shift means for each label
+        return Array.from({ length: numFeatures }, () => mean + Math.random() * 0.5 - 0.5);
+    }
 
-    for (let i = 0; i < SAMPLE_SIZE; i++) {
-        const image = [];
-        for (let j = 0; j < 784; j++) image.push(imageData[i * 784 + j] / 255);
-
-        if (i < SAMPLE_SIZE - 1000) {
-            images.push(image);
-            labels.push(labelData[i]);
-        } else {
-            testImages.push(image);
-            testLabels.push(labelData[i]);
+    // Generate client data
+    for (let clientId = 0; clientId < numClients; clientId++) {
+        const allowedLabels = clientLabelDistribution[clientId];
+        for (let i = 0; i < totalSamplesPerClient; i++) {
+            const label = allowedLabels[Math.floor(Math.random() * allowedLabels.length)];
+            const features = generateFeaturesForLabel(label);
+            clientData[clientId].xs.push(features);
+            clientData[clientId].labels.push(label);
         }
     }
-    mnistData = { xs: images, labels: labels, testXs: testImages, testLabels: testLabels };
-    return mnistData;
-}
 
-async function splitDataForClients() {
-    const data = await loadMNIST();
-    const splitSize = Math.floor(data.xs.length / NUM_CLIENTS);
+    // Generate test data (uniformly across all labels)
+    for (let i = 0; i < testSize; i++) {
+        const label = Math.floor(Math.random() * 10); // All 10 labels
+        const features = generateFeaturesForLabel(label);
+        testData.xs.push(features);
+        testData.labels.push(label);
+    }
 
-    return Array.from({ length: NUM_CLIENTS }, (_, i) => ({
-        xs: data.xs.slice(i * splitSize, (i + 1) * splitSize),
-        labels: data.labels.slice(i * splitSize, (i + 1) * splitSize)
-    }));
+    data = {
+        clientData,
+        testData
+    };
+
+    console.log("Structured synthetic dataset generated.");
+    return data;
 }
 
 /******************************************************
@@ -129,11 +140,13 @@ async function splitDataForClients() {
  ******************************************************/
 function createModel() {
     const model = tf.sequential();
-    model.add(tf.layers.dense({ units: 128, activation: 'relu', inputShape: [784] }));
-    model.add(tf.layers.dense({ units: 10, activation: 'softmax' }));
+    model.add(tf.layers.dense({ units: 32, activation: 'relu', inputShape: [10] })); // Input size: 10
+    model.add(tf.layers.dense({ units: 16, activation: 'relu' }));
+    model.add(tf.layers.dense({ units: 10, activation: 'softmax' })); // 10 classes
     model.compile({ optimizer: 'adam', loss: 'categoricalCrossentropy', metrics: ['accuracy'] });
     return model;
 }
+
 
 function aggregateWeights(clientWeights) {
     const averagedWeights = clientWeights[0].weights.map(w => tf.zerosLike(w));
@@ -144,9 +157,8 @@ function aggregateWeights(clientWeights) {
 }
 
 async function evaluateGlobalModel(aggregatedWeights) {
-    const data = await loadMNIST();
-    const testXs = tf.tensor2d(data.testXs);
-    const testYs = tf.oneHot(tf.tensor1d(data.testLabels, 'int32'), 10);
+    const testXs = tf.tensor2d(data.testData.xs);
+    const testYs = tf.oneHot(tf.tensor1d(data.testData.labels, 'int32'), 10);
 
     const globalModel = createModel();
     globalModel.setWeights(aggregatedWeights);
@@ -161,6 +173,7 @@ async function evaluateGlobalModel(aggregatedWeights) {
     return testAccuracy;
 }
 
+
 /******************************************************
  * 5. FEDERATED LEARNING FUNCTIONS
  ******************************************************/
@@ -168,7 +181,9 @@ async function trainClient(data, clientId, weights) {
     const model = createModel();
     model.setWeights(weights);
 
-    const xs = tf.tensor2d(data.xs);
+    // Explicitly reshape the input data
+    const inputShape = [data.xs.length, NUM_FEATURES];
+    const xs = tf.tensor2d(data.xs, inputShape);
     const ys = tf.oneHot(tf.tensor1d(data.labels, 'int32'), 10);
 
     await model.fit(xs, ys, {
@@ -176,9 +191,12 @@ async function trainClient(data, clientId, weights) {
         callbacks: {
             onEpochEnd: (epoch, logs) => {
                 if (!flChartLoss.data.datasets[clientId]) {
-                    flChartLoss.data.datasets.push({ 
+                    flChartLoss.data.datasets.push({
                         label: `Client ${clientId + 1} Loss`,
-                        data: [], borderColor: clientColors[clientId % clientColors.length], fill: false
+                        data: [],
+                        borderWidth: 2,
+                        borderColor: clientColors[clientId % clientColors.length],
+                        fill: false
                     });
                 }
                 flChartLoss.data.datasets[clientId].data.push(logs.loss);
@@ -187,13 +205,18 @@ async function trainClient(data, clientId, weights) {
         }
     });
 
-    const accuracy = (await model.evaluate(xs, ys))[1].dataSync()[0];
+    // Evaluate the model to get accuracy
+    const evalResult = await model.evaluate(xs, ys);
+    const accuracy = evalResult.length > 1 ? evalResult[1].dataSync()[0] : 0; // Check for accuracy tensor
+    console.log(`Client ${clientId} Accuracy: ${accuracy}`);
+
     const updatedWeights = model.getWeights().map(w => w.clone());
 
     xs.dispose();
     ys.dispose();
     return { weights: updatedWeights, accuracy };
 }
+
 
 async function startFederatedLearning() {
     showLoading("Federated Learning in Progress...");
@@ -202,7 +225,9 @@ async function startFederatedLearning() {
 
     const model = createModel();
     let weights = model.getWeights().map(w => w.clone());
-    const clientsData = await splitDataForClients();
+
+    const allData = await generateSyntheticDataWithTest();
+    const clientsData = allData.clientData;
 
     // Initialize datasets if not already present
     if (flChartAccuracy.data.datasets.length === 0) {
@@ -247,9 +272,10 @@ async function startFederatedLearning() {
         flChartAccuracy.data.datasets[1].data.push(avgTrainAccuracy); // Average Train Accuracy
 
         flChartAccuracy.update();
-    }
+    }  
+    const finalAccuracy = await evaluateGlobalModel(weights);
 
-    document.getElementById('outputFL').innerText = "Federated Learning Complete!";
+    document.getElementById('outputFL').innerText = `Federated Learning Complete!\nFinal Test Set Accuracy: ${(finalAccuracy * 100).toFixed(2)}%`;
     hideLoading();
 }
 
@@ -261,11 +287,13 @@ async function trainCentralizedModel() {
     showLoading("Centralized Learning in Progress...");
     initializeCentralChart();
 
-    const data = await loadMNIST();
-    const xs = tf.tensor2d(data.xs);
-    const ys = tf.oneHot(tf.tensor1d(data.labels, 'int32'), 10);
-    const testXs = tf.tensor2d(data.testXs);
-    const testYs = tf.oneHot(tf.tensor1d(data.testLabels, 'int32'), 10);
+    const data = await generateSyntheticDataWithTest();
+    const allXs = data.clientData.flatMap(client => client.xs);
+    const allLabels = data.clientData.flatMap(client => client.labels);
+    const xs = tf.tensor2d(allXs);
+    const ys = tf.oneHot(tf.tensor1d(allLabels, 'int32'), 10);
+    const testXs = tf.tensor2d(data.testData.xs);
+    const testYs = tf.oneHot(tf.tensor1d(data.testData.labels, 'int32'), 10);
 
     const model = createModel();
 
